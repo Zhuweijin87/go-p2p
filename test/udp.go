@@ -59,54 +59,6 @@ type (
 	}
 )
 
-type packet interface {
-	handle(t *udp, to *net.UDPAddr) error
-}
-
-func (p ping) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("ping handle")
-
-	reply := &pong{
-		ID:     t.self.ID,
-		Expire: time.Now().Add(10 * time.Second).Unix(),
-	}
-
-	t.send(pongTag, reply, to)
-
-	return nil
-}
-
-func (p pong) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("pong handle")
-	return nil
-}
-
-//
-func (p find) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("find handle:", p.ID, p.Expire)
-
-	var nodes []node
-	nodes = append(nodes, t.self)
-	reply := &neigbour{
-		ID:     "neigbour",
-		Expire: time.Now().Add(10 * time.Second).Unix(),
-		Nodes:  nodes,
-	}
-	t.send(neigbourTag, reply, to)
-	return nil
-}
-
-// 处理返回节点
-func (p neigbour) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("neogbour handle")
-
-	for _, n := range p.Nodes {
-		fmt.Println(":", n.ID, n.IP, n.UDP)
-		t.ping(to)
-	}
-	return nil
-}
-
 func ListenUDP(saddr string, id string) *udp {
 	laddr, err := net.ResolveUDPAddr("udp", saddr)
 	if err != nil {
@@ -259,6 +211,54 @@ func (t *udp) ping(toaddr *net.UDPAddr) {
 
 func (t *udp) pending() {
 
+}
+
+type packet interface {
+	handle(t *udp, to *net.UDPAddr) error
+}
+
+func (p ping) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("ping handle")
+
+	reply := &pong{
+		ID:     t.self.ID,
+		Expire: time.Now().Add(10 * time.Second).Unix(),
+	}
+
+	t.send(pongTag, reply, to)
+
+	return nil
+}
+
+func (p pong) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("pong handle")
+	return nil
+}
+
+//
+func (p find) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("find handle:", p.ID, p.Expire)
+
+	var nodes []node
+	nodes = append(nodes, t.self)
+	reply := &neigbour{
+		ID:     "neigbour",
+		Expire: time.Now().Add(10 * time.Second).Unix(),
+		Nodes:  nodes,
+	}
+	t.send(neigbourTag, reply, to)
+	return nil
+}
+
+// 处理返回节点
+func (p neigbour) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("neogbour handle")
+
+	for _, n := range p.Nodes {
+		fmt.Println(":", n.ID, n.IP, n.UDP)
+		t.ping(to)
+	}
+	return nil
 }
 
 // 存储节点的盒子
