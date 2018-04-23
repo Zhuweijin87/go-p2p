@@ -17,6 +17,7 @@ type node struct {
 	TCP int
 	ID  string
 }
+
 type udp struct {
 	conn  *net.UDPConn
 	self  node
@@ -59,6 +60,88 @@ type (
 	}
 )
 
+type packet interface {
+	handle(t *udp, to *net.UDPAddr) error
+}
+
+// 创建一个node
+func newNode(id string, ip *net.UDPAddr) node {
+	return node{
+		ID:  id,
+		IP:  ip.IP.String(),
+		UDP: ip.Port,
+		TCP: ip.Port,
+	}
+}
+
+// 获取有效的节点
+func (t *udp) getNodesExcept(id string) []node {
+	var nodes []node
+	if len(t.tab.trustNode) > 0 {
+		for k, n := range t.tab.trustNode {
+			if k != id {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	if len(nodes) < 12 {
+		for k, n := range t.tab.potentialNode {
+			if k != id {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+	return nodes
+}
+
+func (p ping) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("ping handle", "from", p.ID)
+
+	reply := &pong{
+		ID:     t.self.ID,
+		Expire: time.Now().Add(10 * time.Second).Unix(),
+	}
+
+	t.send(pongTag, reply, to)
+
+	return nil
+}
+
+func (p pong) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("pong handle", "from", p.ID)
+	return nil
+}
+
+func (p find) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("find handle")
+
+	var nodes []node
+	nodes = t.getNodesExcept(p.ID) // 返回节点
+
+	reply := &neigbour{
+		ID:     t.self.ID,
+		Expire: time.Now().Add(10 * time.Second).Unix(),
+		Nodes:  nodes,
+	}
+
+	t.tab.addPotential(newNode(p.ID, to))
+	t.send(neigbourTag, reply, to)
+	return nil
+}
+
+func (p neigbour) handle(t *udp, to *net.UDPAddr) error {
+	log.Println("neogbour handle")
+
+	for _, n := range p.Nodes {
+		fmt.Println(">>", n.ID, n.IP, n.UDP)
+	}
+
+	go t.bondNode(p.Nodes)
+
+	return nil
+}
+
 func ListenUDP(saddr string, id string) *udp {
 	laddr, err := net.ResolveUDPAddr("udp", saddr)
 	if err != nil {
@@ -97,7 +180,6 @@ func (t *udp) Wait() {
 	t.conn.Close()
 }
 
-// 处理数据
 func (t *udp) readLoop() {
 	buf := make([]byte, 1028)
 	for {
@@ -107,9 +189,9 @@ func (t *udp) readLoop() {
 			return
 		}
 
-		log.Println("from:", from.String())
+		//log.Println("from:", from.String())
 
-		fmt.Println("recv:", buf[:nbytes])
+		//fmt.Println("recv:", buf[:nbytes])
 		pack := decodePacket(buf[:nbytes])
 		if pack == nil {
 			log.Println("invalid packet")
@@ -129,13 +211,16 @@ func (t *udp) discoverLoop() {
 				//log.Println("self node, continue")
 				continue
 			}
-			toaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", Mainnet[0].IP, Mainnet[0].UDP))
-			if err != nil {
-				log.Println("resolve error:", err)
-				continue
-			}
 
-			t.findnode(toaddr)
+			for _, n := range t.tab.trustNode {
+				toaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", n.IP, n.UDP))
+				if err != nil {
+					log.Println("resolve error:", err)
+					break
+				}
+
+				t.findnode(toaddr)
+			}
 		}
 	}
 }
@@ -192,7 +277,7 @@ func (t *udp) send(typ byte, pack packet, toaddr *net.UDPAddr) {
 // 查找节点
 func (t *udp) findnode(toaddr *net.UDPAddr) {
 	p := &find{
-		ID:     "test",
+		ID:     t.self.ID, // from self
 		Expire: time.Now().Add(10 * time.Second).Unix(),
 	}
 
@@ -209,72 +294,53 @@ func (t *udp) ping(toaddr *net.UDPAddr) {
 	t.send(pingTag, p, toaddr)
 }
 
-func (t *udp) pending() {
-
-}
-
-type packet interface {
-	handle(t *udp, to *net.UDPAddr) error
-}
-
-func (p ping) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("ping handle")
-
-	reply := &pong{
-		ID:     t.self.ID,
-		Expire: time.Now().Add(10 * time.Second).Unix(),
+// 对潜在节点进行ping/pong
+func (t *udp) bondNode(nodes []node) {
+	for _, n := range nodes {
+		if n.ID != t.self.ID {
+			toaddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", n.IP, n.UDP))
+			if err != nil {
+				log.Println("resolve udp addr error", err)
+				continue
+			}
+			t.ping(toaddr)
+		}
 	}
-
-	t.send(pongTag, reply, to)
-
-	return nil
-}
-
-func (p pong) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("pong handle")
-	return nil
-}
-
-//
-func (p find) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("find handle:", p.ID, p.Expire)
-
-	var nodes []node
-	nodes = append(nodes, t.self)
-	reply := &neigbour{
-		ID:     "neigbour",
-		Expire: time.Now().Add(10 * time.Second).Unix(),
-		Nodes:  nodes,
-	}
-	t.send(neigbourTag, reply, to)
-	return nil
-}
-
-// 处理返回节点
-func (p neigbour) handle(t *udp, to *net.UDPAddr) error {
-	log.Println("neogbour handle")
-
-	for _, n := range p.Nodes {
-		fmt.Println(":", n.ID, n.IP, n.UDP)
-		t.ping(to)
-	}
-	return nil
 }
 
 // 存储节点的盒子
 type bucket struct {
-	mux sync.Mutex
-	db  map[string]node
+	sync.Mutex
+	trustNode     map[string]node
+	potentialNode map[string]node
 }
 
 func newBucket() *bucket {
-	return &bucket{
-		db: make(map[string]node),
+	b := &bucket{
+		trustNode:     make(map[string]node),
+		potentialNode: make(map[string]node),
 	}
-}
-func (b *bucket) add(n node) {
-	b.mux.Lock()
-	defer b.mux.Unlock()
 
-	b.db[n.ID] = n
+	// 将默认节点添加到信任节点中去
+	for _, n := range Mainnet {
+		b.trustNode[n.ID] = n
+	}
+
+	return b
+}
+
+// 添加潜在节点
+func (b *bucket) addPotential(n node) {
+	b.Lock()
+	defer b.Unlock()
+
+	b.potentialNode[n.ID] = n
+}
+
+// 添加信任节点
+func (b *bucket) addTrustNode(n node) {
+	b.Lock()
+	defer b.Unlock()
+
+	b.trustNode[n.ID] = n
 }
